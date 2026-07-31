@@ -1,0 +1,7 @@
+name: ineeji_glass
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pandas=2.3.*
+  - pyarrow=21.*
