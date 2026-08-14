@@ -7,3 +7,12 @@ dependencies:
   - pyarrow=21.*
   - ipykernel
   - matplotlib
+  # tigramite runtime deps (conda-forge builds beat pip wheels for these)
+  - numpy
+  - scipy
+  - numba
+  - networkx
+  - scikit-learn
+  - pip
+  - pip:
+      - tigramite

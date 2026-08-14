@@ -43,7 +43,7 @@ from tigramite.pcmci import PCMCI
 DATA  = Path("data/20250710_0000-20260729_0000.parquet")
 
 # one directory per method, so the two sets of results never mix
-RUNS_BY_METHOD = {"pcmciplus": Path("runs_simple"),
+RUNS_BY_METHOD = {"pcmciplus": Path("runs_all"),
                   "lpcmci":    Path("runs_simple_lpcmci")}
 METHOD = "pcmciplus"          # default; override with --method lpcmci
 
@@ -59,16 +59,16 @@ SWEEP = [
     # name,             flows,  ratio, freq
     # ("1_pos_oxy_10",    "pos",  False, "10min"),
     # ("2_pos_ratio_10",  "pos",  True,  "10min"),
-    ("3_main_oxy_10",   "main", False, "10min"),
+    ("3_pos_oxy_10",   "pos", False, "10min"),
     # ("4_main_ratio_10", "main", True,  "10min"),
     # ("5_pos_ratio_5",   "pos",  True,  "5min"),
     # ("6_main_ratio_5",  "main", True,  "5min"),
     # ("7_pos_ratio_15",  "pos",  True,  "15min"),
     # ("8_main_ratio_15", "main", True,  "15min"),
-    ("9_main_oxy_5",  "main", False,  "5min"),
-    ("10_main_oxy_15",  "main", False,  "15min"),
-    ("11_main_oxy_20",  "main", False,  "20min"),
-     ("12_main_oxy_30",  "main", False,  "30min")
+    ("9_pos_oxy_5",  "pos", False,  "5min"),
+    ("10_pos_oxy_15",  "pos", False,  "15min"),
+    ("11_pos_oxy_20",  "pos", False,  "20min"),
+     ("12_pos_oxy_30",  "pos", False,  "30min")
 ]
 
 HORIZON  = "3.5h"               # tau_max = HORIZON / freq, per run
@@ -117,11 +117,11 @@ REQUIRE_ALL    = True        # NaN a composite unless every member is present
 TEMP_DROP_ZERO = True         # exact 0 on a thermocouple is a dropout, not a reading
 
 MISC    = ["pull"]
-WEATHER = []
+WEATHER = ["WEATHER_temp", "WEATHER_humi", "WEATHER_acc_precip"]
 
 COMP_SRC = [c for cols in COMPOSITES.values() for c in cols]
 
-FLOWC   = MAINC                          # >0 filter, then log
+FLOWC   = OILC + OXYC                          # >0 filter, then log
 NONFLOW = TEMPC + MISC    # carried through as levels
 
 WEATHER_EXOGENOUS = True             # forbid furnace -> weather links
