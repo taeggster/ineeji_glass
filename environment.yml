@@ -5,3 +5,5 @@ dependencies:
   - python=3.13
   - pandas=2.3.*
   - pyarrow=21.*
+  - ipykernel
+  - matplotlib
