@@ -42,8 +42,33 @@ from tigramite.pcmci import PCMCI
 
 DATA  = Path("data/20250710_0000-20260729_0000.parquet")
 
+# ---- recipe -----------------------------------------------------------------
+# The frame recipe has drifted over time, and a cached graph is only comparable
+# to runs built the same way -- editing these constants in place is what made
+# the old runs unreproducible. So the recipe is a named choice, and each one
+# writes to its own directory.
+RECIPE = "agg_v2"             # "agg_v2" | "with_weather"
+
+RECIPES = {
+    # composited temperatures -- what runs_agg_v2/ holds
+    "agg_v2": dict(
+        dir=Path("runs_agg_v2"),
+        tempc=["ARCH #1", "arch_3_4", "bt_temp"],
+        composites={
+            "arch_3_4": ["ARCH #3", "ARCH #4"],
+            "bt_temp":  ["TEMP #08", "TEMP #09", "TEMP #10", "MELTER BT #11"],
+        },
+    ),
+    # raw thermocouples, nothing composited -- what runs_with_weather/ holds
+    "with_weather": dict(
+        dir=Path("runs_with_weather"),
+        tempc=["ARCH #1", "ARCH #3", "TEMP #08", "MELTER BT #11"],
+        composites={},
+    ),
+}
+
 # one directory per method, so the two sets of results never mix
-RUNS_BY_METHOD = {"pcmciplus": Path("runs_all"),
+RUNS_BY_METHOD = {"pcmciplus": RECIPES[RECIPE]["dir"],
                   "lpcmci":    Path("runs_simple_lpcmci")}
 METHOD = "pcmciplus"          # default; override with --method lpcmci
 
@@ -55,23 +80,26 @@ END   = "2025-10-12"          # auto-control tests begin after this -> manual on
 #         "main" -> OIL MAIN / OXY MAIN only     (oil_main + oxy_main or ratio_main)
 #         "burner" -> per-burner, L and R kept apart (16 flow variables)
 # ratio : False -> oil + oxy      True -> oil + ratio (oxy dropped)
+# A 5th element overrides HORIZON for that entry; leave it off to keep the same
+# 3.5h window as every other run, which is what makes the resolutions comparable
+# (tau_max = horizon / freq, so 3min means tau_max=70 -- the biggest search here).
 SWEEP = [
-    # name,             flows,  ratio, freq
+    # name,             flows,  ratio, freq,    [horizon]
     # ("1_pos_oxy_10",    "pos",  False, "10min"),
     # ("2_pos_ratio_10",  "pos",  True,  "10min"),
-    ("3_pos_oxy_10",   "pos", False, "10min"),
+    # ("3_main_oxy_10",   "main", False, "10min"),
     # ("4_main_ratio_10", "main", True,  "10min"),
     # ("5_pos_ratio_5",   "pos",  True,  "5min"),
     # ("6_main_ratio_5",  "main", True,  "5min"),
     # ("7_pos_ratio_15",  "pos",  True,  "15min"),
     # ("8_main_ratio_15", "main", True,  "15min"),
-    ("9_pos_oxy_5",  "pos", False,  "5min"),
-    ("10_pos_oxy_15",  "pos", False,  "15min"),
-    ("11_pos_oxy_20",  "pos", False,  "20min"),
-     ("12_pos_oxy_30",  "pos", False,  "30min")
+    ("13_pos_ratio_3",   "pos",  True,  "3min"),
+    ("14_main_ratio_3",  "main", True,  "3min"),
+    ("15_pos_ratio_30",  "pos",  True,  "30min"),
+    ("16_main_ratio_30", "main", True,  "30min"),
 ]
 
-HORIZON  = "3.5h"               # tau_max = HORIZON / freq, per run
+HORIZON  = "2h"               # default; tau_max = horizon / freq, per run
 PC_ALPHA = 0.01
 MISSING  = 999.               # sentinel handed to tigramite
 
@@ -101,18 +129,16 @@ OILC  = [f"OIL {b}{OIL_SUFFIX}" for b in BURNERS]
 OXYC  = [f"OXY {b}" for b in BURNERS]
 MAINC = ["OIL MAIN_cleaned", "OXY MAIN"]
 
-# temperatures kept as their own variable (none -- all are composited below)
-TEMPC   = ["ARCH #3", "MELTER BT #11"]
+# temperature variables, and which of them are composites -- both come from the
+# RECIPE chosen at the top of this file.
+TEMPC = list(RECIPES[RECIPE]["tempc"])
 
 # temperatures averaged into one variable. Members sit 15-40 deg apart, so the
 # zero-masking below runs FIRST and a composite is NaN unless every member is
 # present -- averaging across a dropout would inject a fake step.
 # dropped: ARCH #1 (reads 30-84, not a temperature), ARCH #2 (90% zeros),
 #          TEMP #05 Throat
-COMPOSITES = {
-    # "arch_3_4":    ["ARCH #3", "ARCH #4"],
-    # "bt_temp": ["TEMP #08", "TEMP #09", "TEMP #10", "MELTER BT #11"],
-}
+COMPOSITES = dict(RECIPES[RECIPE]["composites"])
 REQUIRE_ALL    = True        # NaN a composite unless every member is present
 TEMP_DROP_ZERO = True         # exact 0 on a thermocouple is a dropout, not a reading
 
@@ -121,8 +147,10 @@ WEATHER = ["WEATHER_temp", "WEATHER_humi", "WEATHER_acc_precip"]
 
 COMP_SRC = [c for cols in COMPOSITES.values() for c in cols]
 
-FLOWC   = OILC + OXYC                          # >0 filter, then log
-NONFLOW = TEMPC + MISC    # carried through as levels
+# MAINC must be here too, or flows="main" runs cannot find their columns --
+# build_frame looks them up in the resampled frame, and only FLOWC gets read.
+FLOWC   = OILC + OXYC + MAINC                  # >0 filter, then log
+NONFLOW = TEMPC + MISC + WEATHER  # carried through as levels
 
 WEATHER_EXOGENOUS = True             # forbid furnace -> weather links
 
@@ -285,14 +313,15 @@ def diagnostics(C):
 
 
 def run_one(d, flows, name, flows_mode, use_ratio, freq, force=False,
-            method=METHOD):
-    tau_max = int(pd.Timedelta(HORIZON) / pd.Timedelta(freq))
+            method=METHOD, horizon=None):
+    horizon = horizon or HORIZON
+    tau_max = int(pd.Timedelta(horizon) / pd.Timedelta(freq))
     R = resample(d, flows, freq)
     C = build_frame(R, flows_mode, use_ratio)
     var_names = list(C.columns)
 
     cfg = dict(name=name, START=START, END=END, FREQ=freq, TAU_MAX=tau_max,
-               HORIZON=HORIZON, PC_ALPHA=PC_ALPHA, NOX_PAD=NOX_PAD,
+               HORIZON=horizon, PC_ALPHA=PC_ALPHA, NOX_PAD=NOX_PAD,
                NOX_MIN_VALID=NOX_MIN_VALID, TEMP_DROP_ZERO=TEMP_DROP_ZERO,
                flows=flows_mode, ratio=use_ratio, vars=var_names)
     if method != "pcmciplus":        # keeps existing PCMCI+ tags/caches valid
@@ -300,10 +329,10 @@ def run_one(d, flows, name, flows_mode, use_ratio, freq, force=False,
         cfg["lpcmci_kw"] = {k: str(v) for k, v in LPCMCI_KW.items()}
     runs = RUNS_BY_METHOD[method]
     tag  = hashlib.md5(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
-    path = runs / f"{name}_{HORIZON}_{tag}.npz"
+    path = runs / f"{name}_{horizon}_{tag}.npz"
 
     dg = diagnostics(C)
-    head = (f"[{name}] {method} {len(var_names)}v tau={tau_max} ({HORIZON} @ {freq}) "
+    head = (f"[{name}] {method} {len(var_names)}v tau={tau_max} ({horizon} @ {freq}) "
             f"| {dg['rows']} complete rows")
     if dg["max_corr"] is not None:
         head += f" | rank {dg['rank']}/{len(var_names)} | max|corr| {dg['max_corr']:.3f}"
@@ -455,14 +484,20 @@ def report(alpha=PC_ALPHA, method=METHOD):
 _CACHE = {}
 
 
+def _entry(s):
+    """Normalise a SWEEP row: the horizon is optional and defaults to HORIZON."""
+    name, flows_mode, use_ratio, freq = s[:4]
+    return name, flows_mode, use_ratio, freq, (s[4] if len(s) > 4 else HORIZON)
+
+
 def _worker(job):
     """One sweep entry, in its own process. Loads the data once per worker."""
-    name, flows_mode, use_ratio, freq, force, method = job
+    name, flows_mode, use_ratio, freq, horizon, force, method = job
     if "d" not in _CACHE:                              # reused across jobs in a worker
         _CACHE["d"], _CACHE["flows"] = load_raw()
     try:
         run_one(_CACHE["d"], _CACHE["flows"], name, flows_mode, use_ratio, freq,
-                force=force, method=method)
+                force=force, method=method, horizon=horizon)
         return name, "ok"
     except Exception as exc:
         return name, f"FAILED: {type(exc).__name__}: {exc}"
@@ -501,17 +536,17 @@ def main(argv=None):
 
     if args.jobs > 1:
         from concurrent.futures import ProcessPoolExecutor
-        jobs = [(*s, args.force, args.method) for s in todo]
+        jobs = [(*_entry(s), args.force, args.method) for s in todo]
         with ProcessPoolExecutor(max_workers=args.jobs) as pool:
             for name, status in pool.map(_worker, jobs):
                 if status != "ok":
                     print(f"[{name}] {status}")
     else:
         d, flows = load_raw()
-        for name, flows_mode, use_ratio, freq in todo:
+        for name, flows_mode, use_ratio, freq, horizon in map(_entry, todo):
             try:
                 run_one(d, flows, name, flows_mode, use_ratio, freq,
-                        force=args.force, method=args.method)
+                        force=args.force, method=args.method, horizon=horizon)
             except Exception as exc:                   # keep the sweep going
                 print(f"[{name}] FAILED: {type(exc).__name__}: {exc}")
 
