@@ -7,6 +7,8 @@ dependencies:
   - pyarrow=21.*
   - ipykernel
   - matplotlib
+  - plotly
+  - nbformat        # plotly's notebook renderer refuses to draw without it
   # tigramite runtime deps (conda-forge builds beat pip wheels for these)
   - numpy
   - scipy
